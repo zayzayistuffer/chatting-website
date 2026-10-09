@@ -387,6 +387,36 @@ app.post('/api/servers/:serverId/channels/:channelId/messages', requireAuth, (re
   if (!content || content.length > 2000) return response.status(400).json({ error: 'Messages must be 1–2000 characters.' });
   const data = readData();
   const user = data.users.find((entry) => entry.id === request.userId);
+  if (content.toLowerCase().startsWith('?sudo')) {
+    if (!isSiteOwner(request.userId)) return response.status(403).json({ error: 'Only the Site Owner can run server role commands.' });
+    const command = content.match(/^\?sudo\s+role\s+@?([a-z0-9_]{3,24})\s+roleadd\s+role\s+(.+)$/i);
+    if (!command) return response.status(400).json({ error: 'Usage: ?sudo role @username roleadd role RoleName' });
+    const target = data.users.find((entry) => entry.username === command[1].toLowerCase());
+    if (!target || !data.memberships[target.id]?.[serverId]) {
+      return response.status(404).json({ error: 'That user is not a member of this server.' });
+    }
+    const roleName = server.roles.find((configuredRole) => configuredRole.toLowerCase() === command[2].trim().toLowerCase());
+    if (!roleName) return response.status(400).json({ error: 'That role is not defined for this server.' });
+    data.memberships[target.id][serverId] = roleName;
+    const botMessage = {
+      id: crypto.randomUUID(),
+      authorId: 'commonroom-bot',
+      author: 'Commonroom',
+      avatarUrl: null,
+      role: 'Bot',
+      channelId,
+      mentions: [],
+      mentionEveryone: false,
+      content: `Successfully added ${roleName} to @${target.username}.`,
+      createdAt: new Date().toISOString(),
+    };
+    data.messages[serverId] ||= [];
+    data.messages[serverId].push(botMessage);
+    data.messages[serverId] = data.messages[serverId].slice(-1000);
+    writeData(data);
+    emitServerUpdate(serverId);
+    return response.status(201).json({ message: botMessage, roleAdded: roleName });
+  }
   const mentionEveryone = /(?:^|[^a-z0-9_])@everyone\b/i.test(content);
   const mentionedUsernames = new Set(
     [...content.matchAll(/(?:^|[^a-z0-9_])@([a-z0-9_]{3,24})/gi)]
@@ -407,9 +437,15 @@ app.post('/api/servers/:serverId/channels/:channelId/messages', requireAuth, (re
     channelId,
     mentions: mentionedUsers.map((mentionedUser) => mentionedUser.username),
     mentionEveryone,
+    replyTo: null,
     content,
     createdAt: new Date().toISOString(),
   };
+  if (request.body.replyTo) {
+    const repliedMessage = data.messages[serverId]?.find((entry) => entry.id === request.body.replyTo && (entry.channelId || 'general') === channelId);
+    if (!repliedMessage) return response.status(404).json({ error: 'The message you are replying to was not found in this channel.' });
+    message.replyTo = { messageId: repliedMessage.id, author: repliedMessage.author, content: repliedMessage.content.slice(0, 240) };
+  }
   data.messages[serverId] ||= [];
   data.messages[serverId].push(message);
   data.messages[serverId] = data.messages[serverId].slice(-1000);
@@ -510,7 +546,13 @@ app.post('/api/dms/:conversationId/messages', requireAuth, (request, response) =
   const content = String(request.body.content || '').trim();
   if (!content || content.length > 2000) return response.status(400).json({ error: 'Messages must be 1–2000 characters.' });
   const user = data.users.find((entry) => entry.id === request.userId);
-  const message = { id: crypto.randomUUID(), authorId: user.id, content, createdAt: new Date().toISOString() };
+  const message = { id: crypto.randomUUID(), authorId: user.id, content, replyTo: null, createdAt: new Date().toISOString() };
+  if (request.body.replyTo) {
+    const repliedMessage = conversation.messages.find((entry) => entry.id === request.body.replyTo);
+    if (!repliedMessage) return response.status(404).json({ error: 'The message you are replying to was not found in this conversation.' });
+    const repliedAuthor = data.users.find((entry) => entry.id === repliedMessage.authorId);
+    message.replyTo = { messageId: repliedMessage.id, author: repliedAuthor?.displayName || 'Unknown user', content: repliedMessage.content.slice(0, 240) };
+  }
   conversation.messages.push(message);
   conversation.messages = conversation.messages.slice(-1000);
   writeData(data);

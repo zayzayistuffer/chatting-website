@@ -5,6 +5,7 @@ let directMessages = [];
 let activeServerId = null;
 let activeChannelId = null;
 let activeDmId = null;
+let activeReplyTarget = null;
 let socket = null;
 let refreshTimer = null;
 let dmSearchTimer = null;
@@ -45,6 +46,46 @@ function showToast(message) {
   const toast = element('div', 'toast', message);
   document.body.append(toast);
   setTimeout(() => toast.remove(), 3000);
+}
+
+function setReplyTarget(message, contextKey) {
+  activeReplyTarget = {
+    contextKey,
+    messageId: message.id,
+    author: message.author,
+    content: message.content,
+  };
+  drawWorkspace();
+  if (activeDmId) loadDirectMessages();
+  else loadMessages();
+  document.querySelector('.composer textarea')?.focus();
+}
+
+function appendReplyPreview(container, contextKey) {
+  if (activeReplyTarget?.contextKey !== contextKey) return;
+  const preview = element('div', 'replying-banner');
+  const quote = element('span', '', `Replying to ${activeReplyTarget.author}: ${activeReplyTarget.content}`);
+  const cancel = element('button', 'cancel-reply', '×');
+  cancel.type = 'button';
+  cancel.title = 'Cancel reply';
+  cancel.setAttribute('aria-label', 'Cancel reply');
+  cancel.addEventListener('click', () => {
+    activeReplyTarget = null;
+    preview.remove();
+  });
+  preview.append(quote, cancel);
+  container.append(preview);
+}
+
+function addReplyQuote(container, replyTo) {
+  if (!replyTo) return;
+  const quote = element('button', 'reply-quote', `${replyTo.author}: ${replyTo.content}`);
+  quote.type = 'button';
+  quote.title = 'Jump to replied message';
+  quote.addEventListener('click', () => {
+    document.getElementById(`message-${replyTo.messageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  container.append(quote);
 }
 
 function showPingNotification(ping) {
@@ -608,6 +649,8 @@ function drawWorkspace() {
     const composerWrap = element('div', 'composer-wrap');
     const canSpeak = !channel?.locked || server?.role === 'Owner' || server?.role === 'Site Owner';
     if (canSpeak) {
+      const contextKey = `server:${activeServerId}:${activeChannelId}`;
+      appendReplyPreview(composerWrap, contextKey);
       const composer = element('form', 'composer');
       const textarea = element('textarea');
       textarea.name = 'content';
@@ -626,7 +669,9 @@ function drawWorkspace() {
         if (!content) return;
         send.disabled = true;
         try {
-          await api(`/api/servers/${encodeURIComponent(activeServerId)}/channels/${encodeURIComponent(activeChannelId)}/messages`, { method: 'POST', body: JSON.stringify({ content }) });
+          const replyTo = activeReplyTarget?.contextKey === contextKey ? activeReplyTarget.messageId : null;
+          await api(`/api/servers/${encodeURIComponent(activeServerId)}/channels/${encodeURIComponent(activeChannelId)}/messages`, { method: 'POST', body: JSON.stringify({ content, replyTo }) });
+          if (replyTo) activeReplyTarget = null;
           textarea.value = '';
           textarea.style.height = '';
           await loadMessages();
@@ -682,6 +727,8 @@ function renderDirectMessageChat(conversation) {
   list.id = 'dm-message-list';
   messages.append(welcome, list);
   const composerWrap = element('div', 'composer-wrap');
+  const contextKey = `dm:${conversation.id}`;
+  appendReplyPreview(composerWrap, contextKey);
   const composer = element('form', 'composer');
   const textarea = element('textarea');
   textarea.name = 'content';
@@ -700,7 +747,9 @@ function renderDirectMessageChat(conversation) {
     if (!content) return;
     send.disabled = true;
     try {
-      await api(`/api/dms/${encodeURIComponent(conversation.id)}/messages`, { method: 'POST', body: JSON.stringify({ content }) });
+      const replyTo = activeReplyTarget?.contextKey === contextKey ? activeReplyTarget.messageId : null;
+      await api(`/api/dms/${encodeURIComponent(conversation.id)}/messages`, { method: 'POST', body: JSON.stringify({ content, replyTo }) });
+      if (replyTo) activeReplyTarget = null;
       textarea.value = '';
       textarea.style.height = '';
       await refreshDirectMessages();
@@ -749,13 +798,21 @@ async function loadDirectMessages() {
 
 function renderDirectMessage(message) {
   const row = element('article', 'message');
+  row.id = `message-${message.id}`;
   row.append(avatarElement(message));
   const body = element('div', 'message-body');
   const meta = element('div', 'message-meta');
   meta.append(element('span', 'message-author', message.author));
   meta.append(element('time', 'message-time', new Date(message.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })));
+  addReplyQuote(body, message.replyTo);
   body.append(meta, element('p', 'message-content', message.content));
   row.append(body);
+  const reply = element('button', 'reply-btn', '↩');
+  reply.type = 'button';
+  reply.title = 'Reply';
+  reply.setAttribute('aria-label', `Reply to ${message.author}`);
+  reply.addEventListener('click', () => setReplyTarget(message, `dm:${activeDmId}`));
+  row.append(reply);
   if (message.authorId === currentUser.id) {
     const remove = element('button', 'delete-btn', '×');
     remove.type = 'button';
@@ -793,11 +850,13 @@ async function loadMessages() {
 
 function renderMessage(message) {
   const row = element('article', 'message');
+  row.id = `message-${message.id}`;
   row.append(avatarElement(message));
   const body = element('div', 'message-body');
+  addReplyQuote(body, message.replyTo);
   const meta = element('div', 'message-meta');
   meta.append(element('span', 'message-author', message.author));
-  meta.append(element('span', `role-chip${message.role === 'Owner' || message.role === 'Site Owner' ? ' owner' : ''}`, message.role));
+  meta.append(element('span', `role-chip${message.role === 'Owner' || message.role === 'Site Owner' ? ' owner' : message.role === 'Bot' ? ' bot' : ''}`, message.role));
   const time = new Date(message.createdAt);
   meta.append(element('time', 'message-time', time.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })));
   const content = element('p', 'message-content');
@@ -810,6 +869,12 @@ function renderMessage(message) {
   content.append(document.createTextNode(message.content.slice(lastIndex)));
   body.append(meta, content);
   row.append(body);
+  const reply = element('button', 'reply-btn', '↩');
+  reply.type = 'button';
+  reply.title = 'Reply';
+  reply.setAttribute('aria-label', `Reply to ${message.author}`);
+  reply.addEventListener('click', () => setReplyTarget(message, `server:${activeServerId}:${activeChannelId}`));
+  row.append(reply);
   const server = servers.find((item) => item.id === activeServerId);
   if (message.authorId === currentUser.id || server?.role === 'Owner' || server?.role === 'Site Owner') {
     const remove = element('button', 'delete-btn', '×');

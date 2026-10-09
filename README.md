@@ -50,6 +50,8 @@ Each server file can define multiple channels with unique lowercase `id` values.
 
 Type `@username` in a message to ping someone who belongs to that server. If they are online, they receive a live notification; mentions of non-members do not notify them. Owners and Site Owners can view and copy a server's invite codes from its sidebar in the website.
 
+The Site Owner can assign a role to an existing server member by sending `?sudo role @username roleadd role RoleName` in that server. The role must be listed in that server's `roles` array, and the change applies only to that server. Commonroom posts a confirmation in the channel. Any user can reply to a channel or direct message using its reply button; replies cannot reference messages from a different conversation.
+
 ## Reset a password
 
 An Owner can enter a member's username in the server sidebar to create a one-time reset code. Share that code privately with the member. They choose **Use a reset code** on the sign-in screen and enter their username, code, and new password. Codes expire after 15 minutes, work once, and are stored hashed. Completing a reset signs the account out of existing sessions; Owners cannot view current or previous passwords.

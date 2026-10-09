@@ -187,11 +187,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .message-author { font-size: 12px; font-weight: 700; }
 .role-chip { padding: 2px 5px; border-radius: 3px; background: #f1efe7; color: #75766f; font-size: 9px; font-weight: 700; }
 .role-chip.owner { background: #f8e8c8; color: #93641c; }
+.role-chip.bot { background: #e5edf0; color: #496c78; }
 .message-time { color: #a1a299; font-size: 9px; }
 .message-content { margin: 2px 0 0; overflow-wrap: anywhere; color: #464941; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
 .delete-btn { position: absolute; top: 5px; right: 5px; display: none; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 5px; background: white; color: #9a5345; font-size: 14px; cursor: pointer; }
+.reply-btn { position: absolute; top: 5px; right: 38px; display: none; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 5px; background: white; color: #59675a; font-size: 14px; cursor: pointer; }
+.message:hover .reply-btn, .reply-btn:focus-visible { display: grid; place-items: center; }
 .message:hover .delete-btn, .delete-btn:focus-visible { display: grid; place-items: center; }
+.reply-quote { display: block; max-width: 100%; overflow: hidden; margin: 0 0 5px; padding: 3px 7px; border-left: 2px solid #92ad96; background: #f2f6f0; color: #6c776c; font-size: 10px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .composer-wrap { padding: 0 max(22px, calc((100% - 860px) / 2)) 22px; }
+.replying-banner { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; padding: 7px 10px; border-left: 2px solid #72987a; border-radius: 4px; background: #f2f6f0; color: #6c776c; font-size: 10px; }
+.replying-banner > span { overflow: hidden; flex: 1; text-overflow: ellipsis; white-space: nowrap; }
+.cancel-reply { flex: 0 0 23px; width: 23px; height: 23px; border: 0; border-radius: 4px; background: transparent; color: #777a72; font-size: 17px; cursor: pointer; }
+.cancel-reply:hover { background: #e6eae2; }
 .composer { display: flex; align-items: flex-end; gap: 9px; min-height: 54px; padding: 8px 9px 8px 15px; border: 1px solid #e2e1d9; border-radius: 8px; background: white; box-shadow: 0 3px 12px rgba(48, 50, 42, .035); }
 .composer textarea { flex: 1; min-width: 0; max-height: 140px; padding: 8px 0 5px; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 13px; line-height: 1.4; }
 .composer textarea:focus-visible { outline: 0; }
@@ -263,6 +271,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   .profile { margin-top: 7px; padding: 7px 2px 0; }
   .profile .avatar { flex-basis: 29px; width: 29px; height: 29px; }
   .profile-modal { padding: 19px; }
+  .reply-btn { display: grid; right: 36px; width: 25px; height: 25px; }
+  .delete-btn { display: grid; width: 25px; height: 25px; }
   .chat-pane { min-height: 0; }
   .chat-header { min-height: 56px; }
   .dm-header-avatar { flex-basis: 30px; width: 30px; height: 30px; }
