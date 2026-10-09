@@ -1,0 +1,14 @@
+{
+    "id": "chat",
+    "name": "Chat",
+    "description": "A file-configured, invite-only chat website",
+    "channels": [
+        { "id": "general", "name": "general", "locked": false },
+        { "id": "announcements", "name": "announcements", "locked": true }
+    ],
+    "roles": ["Owner", "Member"],
+    "invites": {
+        "chat-invite-74382478EfegdsuT": "Member",
+        "chat-owner-91bd3e74f206ca58d1e9b430gdewy784yg4TY8744": "Owner"
+    } 
+}
