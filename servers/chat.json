@@ -1,7 +1,7 @@
 {
     "id": "chat",
     "name": "Chat",
-    "description": "A file-configured, invite-only chat website",
+    "description": "yes",
     "channels": [
         { "id": "general", "name": "general", "locked": false },
         { "id": "announcements", "name": "announcements", "locked": true }

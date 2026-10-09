@@ -59,3 +59,5 @@ An Owner can enter a member's username in the server sidebar to create a one-tim
 ## Data and deployment
 
 Account and message data is stored in `data/store.json`, created automatically and excluded from Git. Passwords are stored as salted scrypt hashes. Active sign-in sessions are held in memory and end when the server restarts. This JSON-backed setup is intended for a small, single-process deployment; use a database and persistent session store before scaling or deploying for broader use.
+
+GitHub Pages only serves static files and cannot run the account, chat, or Socket.IO APIs. Deploy this Node app on a Node-capable host and route the site domain's `/api` and `/socket.io` requests to that server; otherwise account creation and chat requests will fail even though the page loads.
