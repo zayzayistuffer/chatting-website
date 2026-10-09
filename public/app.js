@@ -16,10 +16,16 @@ async function api(url, options = {}) {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
   });
   if (response.status === 204) return null;
-  if (!response.headers.get('content-type')?.includes('application/json')) {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
     throw new Error('The chat API is unavailable on this static site. Commonroom’s Node server must be deployed and its /api routes connected before accounts can be created.');
   }
-  const result = await response.json();
+  let result;
+  try {
+    result = await response.json();
+  } catch {
+    throw new Error('The chat server returned an invalid response. Please reload the page; if this continues, the Node API is not correctly connected to this site.');
+  }
   if (!response.ok) throw new Error(result.error || 'Something went wrong.');
   return result;
 }
