@@ -1,6 +1,6 @@
 # Commonroom
 
-A small invite-only chat website. Accounts can join servers with invite codes; servers themselves are defined by JSON files in `servers/`, not created in the website.
+A small invite-only chat website. Accounts join servers through Member links; servers themselves are defined by JSON files in `servers/`, not created in the website.
 
 ## Run it
 
@@ -9,7 +9,7 @@ npm install
 npm start
 ```
 
-Open http://localhost:3000. Use **Create an account**, then enter an invite code from a server definition to join. The sample invite codes are for local testing; replace them before sharing the app.
+Open http://localhost:3000. Create an account, then open a server's Member invite link to join it.
 
 Select your profile at the bottom of the sidebar to edit your username, display name, and profile picture. Pictures are center-cropped and resized in your browser before being saved.
 
@@ -36,19 +36,19 @@ Add a JSON file in `servers/` and restart the app. For example:
   "id": "book-club",
   "name": "Book Club",
   "description": "Books, notes, and good company.",
-  "roles": ["Owner", "Member"],
-  "invites": {
-    "book-club-member-use-a-long-random-code": "Member",
-    "book-club-owner-use-a-long-random-code": "Owner"
-  }
+  "channels": [
+    { "id": "general", "name": "general", "locked": false },
+    { "id": "announcements", "name": "announcements", "locked": true }
+  ],
+  "roles": ["Owner", "Member"]
 }
 ```
 
-The invite codes are the exact object keys in each server file's `invites` property; enter one of those values to join. The included codes are in `servers/the-lounge.json` and `servers/studio.json`. The file name can be anything ending in `.json`; each server `id` must be unique and contain only lowercase letters, numbers, or hyphens. Invite codes assign the role named beside them. Keep Owner invite codes private. A server member can delete their own messages; that server's Owner or a Site Owner can delete another member's message. These checks are enforced by the server.
+The file name can be anything ending in `.json`; each server `id` must be unique and contain only lowercase letters, numbers, or hyphens. A server link has the form `https://commonroom.abrdns.com/api/invite/<server-id>` and always grants the `Member` role. Owners can copy the current-origin link from that server's sidebar. There are no Owner invite links; the Site Owner can assign server roles using the command below. A server member can delete their own messages; that server's Owner or a Site Owner can delete another member's message. These checks are enforced by the server.
 
 Each server file can define multiple channels with unique lowercase `id` values. Set `locked` to `true` to make a channel readable by members but writable only by that server's Owner and Site Owners. Channels are defined in code; restart the app after changing a server file.
 
-Type `@username` in a message to ping someone who belongs to that server. If they are online, they receive a live notification; mentions of non-members do not notify them. Owners and Site Owners can view and copy a server's invite codes from its sidebar in the website.
+Type `@username` in a message to ping someone who belongs to that server. If they are online, they receive a live notification; mentions of non-members do not notify them. Owners and Site Owners can view and copy the Member invite link from that server's sidebar in the website.
 
 The Site Owner can assign a role to an existing server member by sending `?sudo role @username roleadd role RoleName` in that server. The role must be listed in that server's `roles` array, and the change applies only to that server. Commonroom posts a confirmation in the channel. Any user can reply to a channel or direct message using its reply button; replies cannot reference messages from a different conversation.
 

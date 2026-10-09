@@ -334,6 +334,19 @@ function addField(form, labelText, name, placeholder, type, required, minLength 
 }
 
 async function enterWorkspace() {
+  const inviteServerId = new URLSearchParams(window.location.search).get('invite');
+  if (inviteServerId) {
+    try {
+      await api(`/api/invite/${encodeURIComponent(inviteServerId)}/join`, { method: 'POST' });
+      showToast('Joined the server as a Member.');
+    } catch (failure) {
+      showToast(failure.message);
+    } finally {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('invite');
+      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+  }
   const [serverResult, dmResult] = await Promise.all([api('/api/servers'), api('/api/dms')]);
   servers = serverResult.servers;
   directMessages = dmResult.conversations;
@@ -379,7 +392,7 @@ function drawWorkspace() {
   sidebar.append(element('div', 'section-label', 'Your servers'));
   const serverList = element('div', 'server-list');
   if (!servers.length) {
-    const empty = element('p', 'join-feedback', 'No servers yet. Join one with an invite code.');
+    const empty = element('p', 'join-feedback', 'No servers yet. Ask for a Member invite link to join.');
     empty.style.margin = '8px 7px';
     serverList.append(empty);
   }
@@ -488,42 +501,6 @@ function drawWorkspace() {
   }
   if (!directMessages.length) dmList.append(element('p', 'dm-empty', 'No conversations yet'));
   sidebar.append(dmList);
-  const joinBox = element('form', 'join-box');
-  joinBox.append(element('h3', '', 'Join a server'));
-  const joinDescription = element('p', '', 'Paste an invite code from a server owner.');
-  const joinRow = element('div', 'join-row');
-  const inviteInput = element('input');
-  inviteInput.name = 'inviteCode';
-  inviteInput.placeholder = 'Invite code';
-  inviteInput.autocomplete = 'off';
-  inviteInput.required = true;
-  inviteInput.setAttribute('aria-label', 'Invite code');
-  const joinButton = element('button', '', '+');
-  joinButton.type = 'submit';
-  joinButton.setAttribute('aria-label', 'Join server');
-  joinRow.append(inviteInput, joinButton);
-  const feedback = element('p', 'join-feedback');
-  joinBox.append(joinDescription, joinRow, feedback);
-  joinBox.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    joinButton.disabled = true;
-    feedback.textContent = '';
-    try {
-      const result = await api('/api/servers/join', { method: 'POST', body: JSON.stringify({ inviteCode: inviteInput.value }) });
-      servers.push(result.server);
-      activeServerId = result.server.id;
-      activeChannelId = result.server.channels[0]?.id || null;
-      activeDmId = null;
-      drawWorkspace();
-      watchActiveServer();
-      await loadMessages();
-    } catch (failure) {
-      feedback.textContent = failure.message;
-    } finally {
-      joinButton.disabled = false;
-    }
-  });
-  sidebar.append(joinBox);
   if (activeServer?.role === 'Owner' || activeServer?.role === 'Site Owner') {
     const resetBox = element('form', 'reset-box');
     resetBox.append(element('h3', '', 'Reset a member password'));
@@ -572,27 +549,22 @@ function drawWorkspace() {
     });
     sidebar.append(resetBox);
     const inviteBox = element('section', 'invite-box');
-    inviteBox.append(element('h3', '', 'Server invite codes'));
-    inviteBox.append(element('p', '', 'Share a code to invite someone with its assigned role.'));
-    for (const [code, role] of Object.entries(activeServer.invites || {})) {
-      const invite = element('div', 'invite-item');
-      const inviteMeta = element('div', 'invite-meta');
-      inviteMeta.append(element('span', `invite-role${role === 'Owner' ? ' owner' : ''}`, role));
-      const copyButton = element('button', 'copy-invite', 'Copy');
-      copyButton.type = 'button';
-      copyButton.title = `Copy ${role} invite code`;
-      copyButton.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(code);
-          copyButton.textContent = 'Copied';
-        } catch {
-          showToast(`Select and copy the ${role} code below.`);
-        }
-      });
-      inviteMeta.append(copyButton);
-      invite.append(inviteMeta, element('code', 'invite-code', code));
-      inviteBox.append(invite);
-    }
+    inviteBox.append(element('h3', '', 'Member invite link'));
+    inviteBox.append(element('p', '', 'Anyone who opens this link can join this server as a Member.'));
+    const inviteUrl = `${window.location.origin}/api/invite/${encodeURIComponent(activeServer.id)}`;
+    const inviteCode = element('code', 'invite-link', inviteUrl);
+    const copyButton = element('button', 'copy-invite', 'Copy link');
+    copyButton.type = 'button';
+    copyButton.title = 'Copy Member invite link';
+    copyButton.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(inviteUrl);
+        copyButton.textContent = 'Copied';
+      } catch {
+        showToast('Select and copy the invite link above.');
+      }
+    });
+    inviteBox.append(inviteCode, copyButton);
     sidebar.append(inviteBox);
   }
   const profile = element('div', 'profile');
@@ -700,7 +672,7 @@ function drawWorkspace() {
   } else {
     const empty = element('div', 'empty-state');
     const content = document.createElement('div');
-    content.append(element('strong', '', 'Your corner is ready.'), element('p', '', 'Join a server with an invite code to start chatting with your people.'));
+    content.append(element('strong', '', 'Your corner is ready.'), element('p', '', 'Open a Member invite link to start chatting with your people.'));
     empty.append(content);
     chat.append(empty);
   }

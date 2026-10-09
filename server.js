@@ -46,9 +46,10 @@ function loadServers() {
   const servers = files.map((file) => {
     const server = JSON.parse(fs.readFileSync(path.join(SERVER_DIR, file), 'utf8'));
     server.channels ||= [{ id: 'general', name: 'general', locked: false }];
-    if (!/^[a-z0-9-]+$/.test(server.id) || !server.name || !server.invites || !server.roles) {
+    if (!/^[a-z0-9-]+$/.test(server.id) || !server.name || !Array.isArray(server.roles) || !server.roles.includes('Member')) {
       throw new Error(`Invalid server definition: ${file}`);
     }
+    if (Object.hasOwn(server, 'invites')) throw new Error(`Remove invite codes from ${file}; server links always grant Member.`);
     if (!Array.isArray(server.channels) || server.channels.length === 0) {
       throw new Error(`Server ${server.id} must define at least one channel`);
     }
@@ -65,15 +66,9 @@ function loadServers() {
     return server;
   });
   const ids = new Set();
-  const inviteCodes = new Set();
   for (const server of servers) {
     if (ids.has(server.id)) throw new Error(`Duplicate server id: ${server.id}`);
     ids.add(server.id);
-    for (const [code, role] of Object.entries(server.invites)) {
-      if (inviteCodes.has(code)) throw new Error(`Duplicate invite code: ${code}`);
-      if (!server.roles.includes(role)) throw new Error(`Unknown role "${role}" in ${server.id}`);
-      inviteCodes.add(code);
-    }
   }
   return servers;
 }
@@ -152,7 +147,6 @@ function publicServer(server, userId) {
     channels: server.channels,
     roles: server.roles,
     role,
-    ...(canManageServer(role) ? { invites: server.invites } : {}),
   };
 }
 
@@ -338,19 +332,23 @@ app.get('/api/servers', requireAuth, (request, response) => {
   response.json({ servers });
 });
 
-app.post('/api/servers/join', requireAuth, (request, response) => {
-  const code = String(request.body.inviteCode || '').trim();
-  const server = loadServers().find((entry) => Object.hasOwn(entry.invites, code));
-  if (!server) return response.status(404).json({ error: 'That invite code is not valid.' });
+app.get('/api/invite/:serverId', (request, response) => {
+  if (!findServer(request.params.serverId)) return response.status(404).send('Server not found.');
+  response.redirect(`/?invite=${encodeURIComponent(request.params.serverId)}`);
+});
+
+app.post('/api/invite/:serverId/join', requireAuth, (request, response) => {
+  const server = findServer(request.params.serverId);
+  if (!server) return response.status(404).json({ error: 'Server not found.' });
   if (isSiteOwner(request.userId)) {
-    return response.status(409).json({ error: 'Site Owners already have access to every server.' });
+    return response.json({ server: publicServer(server, request.userId) });
   }
   const data = readData();
   const memberships = data.memberships[request.userId] || {};
   if (memberships[server.id]) {
-    return response.status(409).json({ error: 'You are already a member of this server.' });
+    return response.json({ server: publicServer(server, request.userId) });
   }
-  memberships[server.id] = server.invites[code];
+  memberships[server.id] = 'Member';
   data.memberships[request.userId] = memberships;
   writeData(data);
   response.status(201).json({ server: publicServer(server, request.userId) });
@@ -398,6 +396,19 @@ app.post('/api/servers/:serverId/channels/:channelId/messages', requireAuth, (re
     const roleName = server.roles.find((configuredRole) => configuredRole.toLowerCase() === command[2].trim().toLowerCase());
     if (!roleName) return response.status(400).json({ error: 'That role is not defined for this server.' });
     data.memberships[target.id][serverId] = roleName;
+    const commandMessage = {
+      id: crypto.randomUUID(),
+      authorId: user.id,
+      author: user.displayName,
+      avatarUrl: user.avatarUrl || null,
+      role,
+      channelId,
+      mentions: [target.username],
+      mentionEveryone: false,
+      replyTo: null,
+      content,
+      createdAt: new Date().toISOString(),
+    };
     const botMessage = {
       id: crypto.randomUUID(),
       authorId: 'commonroom-bot',
@@ -411,11 +422,11 @@ app.post('/api/servers/:serverId/channels/:channelId/messages', requireAuth, (re
       createdAt: new Date().toISOString(),
     };
     data.messages[serverId] ||= [];
-    data.messages[serverId].push(botMessage);
+    data.messages[serverId].push(commandMessage, botMessage);
     data.messages[serverId] = data.messages[serverId].slice(-1000);
     writeData(data);
     emitServerUpdate(serverId);
-    return response.status(201).json({ message: botMessage, roleAdded: roleName });
+    return response.status(201).json({ commandMessage, message: botMessage, roleAdded: roleName });
   }
   const mentionEveryone = /(?:^|[^a-z0-9_])@everyone\b/i.test(content);
   const mentionedUsernames = new Set(
