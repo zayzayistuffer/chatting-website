@@ -13,6 +13,8 @@ Open http://localhost:3000. Use **Create an account**, then enter an invite code
 
 Select your profile at the bottom of the sidebar to edit your username, display name, and profile picture. Pictures are center-cropped and resized in your browser before being saved.
 
+Use **Direct messages** in the sidebar to search for a username and start a private one-to-one conversation. Only its two participants can read the messages; each participant can delete only their own messages.
+
 ## Set a Site Owner
 
 Create an account for the person who should administer the site, then add their exact lowercase username to `site-owners.json`:

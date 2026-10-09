@@ -30,6 +30,7 @@ function readData() {
   data.users ||= [];
   data.memberships ||= {};
   data.messages ||= {};
+  data.directMessages ||= {};
   data.passwordResets ||= [];
   return data;
 }
@@ -79,6 +80,15 @@ function loadServers() {
 
 function publicUser(user) {
   return { id: user.id, username: user.username, displayName: user.displayName, avatarUrl: user.avatarUrl || null };
+}
+
+function directMessageId(firstUserId, secondUserId) {
+  return [firstUserId, secondUserId].sort().join('.');
+}
+
+function getDirectConversation(data, conversationId, userId) {
+  const conversation = data.directMessages[conversationId];
+  return conversation?.participants.includes(userId) ? conversation : null;
 }
 
 function tokenFromRequest(request) {
@@ -377,12 +387,15 @@ app.post('/api/servers/:serverId/channels/:channelId/messages', requireAuth, (re
   if (!content || content.length > 2000) return response.status(400).json({ error: 'Messages must be 1–2000 characters.' });
   const data = readData();
   const user = data.users.find((entry) => entry.id === request.userId);
+  const mentionEveryone = /(?:^|[^a-z0-9_])@everyone\b/i.test(content);
   const mentionedUsernames = new Set(
-    [...content.matchAll(/(?:^|[^a-z0-9_])@([a-z0-9_]{3,24})/gi)].map((match) => match[1].toLowerCase()),
+    [...content.matchAll(/(?:^|[^a-z0-9_])@([a-z0-9_]{3,24})/gi)]
+      .map((match) => match[1].toLowerCase())
+      .filter((username) => username !== 'everyone'),
   );
   const mentionedUsers = data.users.filter((mentionedUser) =>
     mentionedUser.id !== user.id
-    && mentionedUsernames.has(mentionedUser.username)
+    && (mentionEveryone || mentionedUsernames.has(mentionedUser.username))
     && (isSiteOwner(mentionedUser.id) || data.memberships[mentionedUser.id]?.[serverId]),
   );
   const message = {
@@ -393,6 +406,7 @@ app.post('/api/servers/:serverId/channels/:channelId/messages', requireAuth, (re
     role,
     channelId,
     mentions: mentionedUsers.map((mentionedUser) => mentionedUser.username),
+    mentionEveryone,
     content,
     createdAt: new Date().toISOString(),
   };
@@ -403,8 +417,11 @@ app.post('/api/servers/:serverId/channels/:channelId/messages', requireAuth, (re
   for (const mentionedUser of mentionedUsers) {
     io.to(`user:${mentionedUser.id}`).emit('mention', {
       serverName: server.name,
+      serverId,
       channelName: channel.name,
+      channelId,
       author: user.displayName,
+      mentionEveryone,
     });
   }
   emitServerUpdate(serverId);
@@ -426,6 +443,92 @@ app.delete('/api/servers/:serverId/channels/:channelId/messages/:messageId', req
   data.messages[serverId] = messages.filter((entry) => entry.id !== messageId);
   writeData(data);
   emitServerUpdate(serverId);
+  response.status(204).end();
+});
+
+app.get('/api/users', requireAuth, (request, response) => {
+  const query = String(request.query.q || '').trim().toLowerCase();
+  if (query.length < 2) return response.json({ users: [] });
+  const users = readData().users
+    .filter((user) => user.id !== request.userId
+      && (user.username.includes(query) || user.displayName.toLowerCase().includes(query)))
+    .slice(0, 20)
+    .map(publicUser);
+  response.json({ users });
+});
+
+app.get('/api/dms', requireAuth, (request, response) => {
+  const data = readData();
+  const usersById = new Map(data.users.map((user) => [user.id, user]));
+  const conversations = Object.values(data.directMessages)
+    .filter((conversation) => conversation.participants.includes(request.userId))
+    .map((conversation) => {
+      const otherUser = usersById.get(conversation.participants.find((id) => id !== request.userId));
+      if (!otherUser) return null;
+      const lastMessage = conversation.messages.at(-1) || null;
+      return { id: conversation.id, user: publicUser(otherUser), lastMessage, updatedAt: lastMessage?.createdAt || conversation.createdAt };
+    })
+    .filter(Boolean)
+    .sort((first, second) => second.updatedAt.localeCompare(first.updatedAt));
+  response.json({ conversations });
+});
+
+app.post('/api/dms', requireAuth, (request, response) => {
+  const username = String(request.body.username || '').trim().toLowerCase();
+  const data = readData();
+  const otherUser = data.users.find((user) => user.username === username);
+  if (!otherUser) return response.status(404).json({ error: 'No account was found with that username.' });
+  if (otherUser.id === request.userId) return response.status(400).json({ error: 'You cannot start a DM with yourself.' });
+  const id = directMessageId(request.userId, otherUser.id);
+  let conversation = data.directMessages[id];
+  const created = !conversation;
+  if (!conversation) {
+    conversation = { id, participants: [request.userId, otherUser.id].sort(), messages: [], createdAt: new Date().toISOString() };
+    data.directMessages[id] = conversation;
+    writeData(data);
+  }
+  if (created) io.to(`user:${otherUser.id}`).emit('dm-available', { conversationId: id });
+  response.status(created ? 201 : 200).json({ conversation: { id, user: publicUser(otherUser) } });
+});
+
+app.get('/api/dms/:conversationId/messages', requireAuth, (request, response) => {
+  const data = readData();
+  const conversation = getDirectConversation(data, request.params.conversationId, request.userId);
+  if (!conversation) return response.status(404).json({ error: 'Direct message conversation not found.' });
+  const usersById = new Map(data.users.map((user) => [user.id, user]));
+  const messages = conversation.messages.slice(-200).map((message) => {
+    const author = usersById.get(message.authorId);
+    return author ? { ...message, author: author.displayName, avatarUrl: author.avatarUrl || null } : message;
+  });
+  response.json({ messages });
+});
+
+app.post('/api/dms/:conversationId/messages', requireAuth, (request, response) => {
+  const data = readData();
+  const conversation = getDirectConversation(data, request.params.conversationId, request.userId);
+  if (!conversation) return response.status(404).json({ error: 'Direct message conversation not found.' });
+  const content = String(request.body.content || '').trim();
+  if (!content || content.length > 2000) return response.status(400).json({ error: 'Messages must be 1–2000 characters.' });
+  const user = data.users.find((entry) => entry.id === request.userId);
+  const message = { id: crypto.randomUUID(), authorId: user.id, content, createdAt: new Date().toISOString() };
+  conversation.messages.push(message);
+  conversation.messages = conversation.messages.slice(-1000);
+  writeData(data);
+  const payload = { conversationId: conversation.id, author: user.displayName, avatarUrl: user.avatarUrl || null };
+  for (const participantId of conversation.participants) io.to(`user:${participantId}`).emit('dm-message', payload);
+  response.status(201).json({ message: { ...message, author: user.displayName, avatarUrl: user.avatarUrl || null } });
+});
+
+app.delete('/api/dms/:conversationId/messages/:messageId', requireAuth, (request, response) => {
+  const data = readData();
+  const conversation = getDirectConversation(data, request.params.conversationId, request.userId);
+  if (!conversation) return response.status(404).json({ error: 'Direct message conversation not found.' });
+  const message = conversation.messages.find((entry) => entry.id === request.params.messageId);
+  if (!message) return response.status(404).json({ error: 'Message not found.' });
+  if (message.authorId !== request.userId) return response.status(403).json({ error: 'You can only delete your own direct messages.' });
+  conversation.messages = conversation.messages.filter((entry) => entry.id !== message.id);
+  writeData(data);
+  for (const participantId of conversation.participants) io.to(`user:${participantId}`).emit('dm-message', { conversationId: conversation.id });
   response.status(204).end();
 });
 

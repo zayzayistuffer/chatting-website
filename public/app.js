@@ -1,10 +1,13 @@
 const app = document.querySelector('#app');
 let currentUser = null;
 let servers = [];
+let directMessages = [];
 let activeServerId = null;
 let activeChannelId = null;
+let activeDmId = null;
 let socket = null;
 let refreshTimer = null;
+let dmSearchTimer = null;
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -42,6 +45,43 @@ function showToast(message) {
   const toast = element('div', 'toast', message);
   document.body.append(toast);
   setTimeout(() => toast.remove(), 3000);
+}
+
+function showPingNotification(ping) {
+  const location = `${ping.serverName} #${ping.channelName}`;
+  const message = ping.mentionEveryone
+    ? `${ping.author} pinged @everyone in ${location}`
+    : `${ping.author} mentioned you in ${location}`;
+  showToast(message);
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+  const notification = new Notification('Commonroom ping', { body: message });
+  notification.addEventListener('click', () => {
+    window.focus();
+    const server = servers.find((item) => item.id === ping.serverId);
+    if (!server) return;
+    activeServerId = server.id;
+    activeChannelId = ping.channelId;
+    drawWorkspace();
+    watchActiveServer();
+    loadMessages();
+    notification.close();
+  });
+}
+
+async function enableNotifications(button) {
+  if (!('Notification' in window)) {
+    showToast('This browser does not support desktop notifications.');
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    showToast('Notifications are blocked in your browser settings.');
+    return;
+  }
+  const permission = await Notification.requestPermission();
+  button.textContent = permission === 'granted' ? 'Alerts on' : 'Enable alerts';
+  if (permission === 'granted') showToast('Desktop ping alerts enabled.');
+  else showToast('Desktop notifications were not enabled. In-app alerts still work.');
 }
 
 function showProfileEditor() {
@@ -253,22 +293,39 @@ function addField(form, labelText, name, placeholder, type, required, minLength 
 }
 
 async function enterWorkspace() {
-  const result = await api('/api/servers');
-  servers = result.servers;
+  const [serverResult, dmResult] = await Promise.all([api('/api/servers'), api('/api/dms')]);
+  servers = serverResult.servers;
+  directMessages = dmResult.conversations;
   activeServerId = servers[0]?.id || null;
   activeChannelId = servers[0]?.channels[0]?.id || null;
+  activeDmId = null;
   drawWorkspace();
   if (typeof window.io === 'function') {
     socket = window.io();
     socket.on('connect', watchActiveServer);
     socket.on('refresh', () => { if (activeServerId) loadMessages(); });
-    socket.on('mention', ({ author, serverName, channelName }) => {
-      showToast(`${author} mentioned you in ${serverName} #${channelName}`);
+    socket.on('mention', showPingNotification);
+    socket.on('dm-available', async ({ conversationId }) => {
+      await refreshDirectMessages();
+      const conversation = directMessages.find((item) => item.id === conversationId);
+      if (conversation) showToast(`New direct message from ${conversation.user.displayName}`);
+    });
+    socket.on('dm-message', async ({ conversationId, author, authorId }) => {
+      await refreshDirectMessages();
+      if (authorId !== currentUser.id && activeDmId !== conversationId) showToast(`New direct message from ${author}`);
     });
     if (socket.connected) watchActiveServer();
   }
   refreshTimer = setInterval(() => { if (activeServerId) loadMessages(); }, 5000);
   if (activeServerId) await loadMessages();
+}
+
+async function refreshDirectMessages() {
+  const result = await api('/api/dms');
+  directMessages = result.conversations;
+  drawWorkspace();
+  if (activeDmId) await loadDirectMessages();
+  else if (activeServerId) await loadMessages();
 }
 
 function drawWorkspace() {
@@ -295,6 +352,7 @@ function drawWorkspace() {
     item.addEventListener('click', async () => {
       activeServerId = server.id;
       activeChannelId = server.channels[0]?.id || null;
+      activeDmId = null;
       drawWorkspace();
       watchActiveServer();
       await loadMessages();
@@ -324,6 +382,71 @@ function drawWorkspace() {
     }
     sidebar.append(channelList);
   }
+  sidebar.append(element('div', 'section-label dm-section-label', 'Direct messages'));
+  const dmSearch = element('div', 'dm-search');
+  const dmSearchInput = element('input', 'dm-search-input');
+  dmSearchInput.type = 'search';
+  dmSearchInput.placeholder = 'Find by username';
+  dmSearchInput.autocomplete = 'off';
+  dmSearchInput.setAttribute('aria-label', 'Find someone to message');
+  const dmSearchResults = element('div', 'dm-search-results');
+  dmSearch.append(dmSearchInput, dmSearchResults);
+  dmSearchInput.addEventListener('input', () => {
+    clearTimeout(dmSearchTimer);
+    dmSearchResults.replaceChildren();
+    const query = dmSearchInput.value.trim();
+    if (query.length < 2) return;
+    dmSearchTimer = setTimeout(async () => {
+      try {
+        const result = await api(`/api/users?q=${encodeURIComponent(query)}`);
+        dmSearchResults.replaceChildren();
+        for (const user of result.users) {
+          const userButton = element('button', 'dm-search-result');
+          userButton.type = 'button';
+          const userInfo = element('span', 'dm-user-info');
+          userInfo.append(element('strong', '', user.displayName), element('span', '', `@${user.username}`));
+          userButton.append(avatarElement(user, 'avatar dm-search-avatar'), userInfo);
+          userButton.addEventListener('click', async () => {
+            try {
+              const created = await api('/api/dms', { method: 'POST', body: JSON.stringify({ username: user.username }) });
+              const conversations = await api('/api/dms');
+              directMessages = conversations.conversations;
+              activeDmId = created.conversation.id;
+              activeServerId = null;
+              activeChannelId = null;
+              drawWorkspace();
+              await loadDirectMessages();
+            } catch (failure) {
+              showToast(failure.message);
+            }
+          });
+          dmSearchResults.append(userButton);
+        }
+        if (!result.users.length) dmSearchResults.append(element('span', 'dm-no-results', 'No users found'));
+      } catch (failure) {
+        showToast(failure.message);
+      }
+    }, 180);
+  });
+  sidebar.append(dmSearch);
+  const dmList = element('div', 'dm-list');
+  for (const conversation of directMessages) {
+    const item = element('button', `dm-item${conversation.id === activeDmId ? ' active' : ''}`);
+    item.type = 'button';
+    const userInfo = element('span', 'dm-user-info');
+    userInfo.append(element('strong', '', conversation.user.displayName), element('span', '', `@${conversation.user.username}`));
+    item.append(avatarElement(conversation.user, 'avatar dm-avatar'), userInfo);
+    item.addEventListener('click', async () => {
+      activeDmId = conversation.id;
+      activeServerId = null;
+      activeChannelId = null;
+      drawWorkspace();
+      await loadDirectMessages();
+    });
+    dmList.append(item);
+  }
+  if (!directMessages.length) dmList.append(element('p', 'dm-empty', 'No conversations yet'));
+  sidebar.append(dmList);
   const joinBox = element('form', 'join-box');
   joinBox.append(element('h3', '', 'Join a server'));
   const joinDescription = element('p', '', 'Paste an invite code from a server owner.');
@@ -349,6 +472,7 @@ function drawWorkspace() {
       servers.push(result.server);
       activeServerId = result.server.id;
       activeChannelId = result.server.channels[0]?.id || null;
+      activeDmId = null;
       drawWorkspace();
       watchActiveServer();
       await loadMessages();
@@ -455,14 +579,25 @@ function drawWorkspace() {
   profile.append(editProfile, logout);
   sidebar.append(profile);
   const chat = element('section', 'chat-pane');
-  if (activeServerId) {
+  if (activeDmId) {
+    const conversation = directMessages.find((item) => item.id === activeDmId);
+    chat.append(renderDirectMessageChat(conversation));
+  } else if (activeServerId) {
     const server = servers.find((item) => item.id === activeServerId);
     const channel = server?.channels.find((item) => item.id === activeChannelId);
     const header = element('header', 'chat-header');
     header.append(element('span', `channel-hash${channel?.locked ? ' is-locked' : ''}`, channel?.locked ? 'L' : '#'));
     const heading = element('div', 'chat-heading');
     heading.append(element('h1', '', channel?.name || 'general'), element('p', '', channel?.locked ? `${server?.name || 'Server'} · Owners only can speak here` : server?.description || 'A place for good conversation.'));
-    header.append(heading, element('span', 'channel-tag', server?.role || 'Member'));
+    const alertsButton = element('button', 'notification-btn', 'Enable alerts');
+    alertsButton.type = 'button';
+    alertsButton.title = 'Enable desktop notifications for pings';
+    alertsButton.setAttribute('aria-label', 'Enable desktop notifications');
+    if ('Notification' in window) {
+      alertsButton.textContent = Notification.permission === 'granted' ? 'Alerts on' : Notification.permission === 'denied' ? 'Alerts blocked' : 'Enable alerts';
+    }
+    alertsButton.addEventListener('click', () => enableNotifications(alertsButton));
+    header.append(heading, alertsButton, element('span', 'channel-tag', server?.role || 'Member'));
     const messages = element('div', 'messages');
     messages.id = 'messages';
     const welcome = element('section', 'welcome');
@@ -528,8 +663,115 @@ function drawWorkspace() {
   app.append(workspace);
 }
 
+function renderDirectMessageChat(conversation) {
+  const chat = element('section', 'chat-pane');
+  if (!conversation) {
+    chat.append(element('div', 'empty-state', 'Direct message not found.'));
+    return chat;
+  }
+  const header = element('header', 'chat-header dm-header');
+  header.append(avatarElement(conversation.user, 'avatar dm-header-avatar'));
+  const heading = element('div', 'chat-heading');
+  heading.append(element('h1', '', conversation.user.displayName), element('p', '', `@${conversation.user.username} · Direct message`));
+  header.append(heading);
+  const messages = element('div', 'messages');
+  messages.id = 'dm-messages';
+  const welcome = element('section', 'welcome dm-welcome');
+  welcome.append(element('span', 'welcome-mark', '@'), element('h2', '', conversation.user.displayName), element('p', '', `This is the beginning of your direct conversation with @${conversation.user.username}.`));
+  const list = element('div', 'message-list');
+  list.id = 'dm-message-list';
+  messages.append(welcome, list);
+  const composerWrap = element('div', 'composer-wrap');
+  const composer = element('form', 'composer');
+  const textarea = element('textarea');
+  textarea.name = 'content';
+  textarea.rows = 1;
+  textarea.maxLength = 2000;
+  textarea.placeholder = `Message @${conversation.user.username}`;
+  textarea.setAttribute('aria-label', 'Direct message');
+  const send = element('button', 'send-btn', '↑');
+  send.type = 'submit';
+  send.title = 'Send direct message';
+  send.setAttribute('aria-label', 'Send direct message');
+  composer.append(textarea, send);
+  composer.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const content = textarea.value.trim();
+    if (!content) return;
+    send.disabled = true;
+    try {
+      await api(`/api/dms/${encodeURIComponent(conversation.id)}/messages`, { method: 'POST', body: JSON.stringify({ content }) });
+      textarea.value = '';
+      textarea.style.height = '';
+      await refreshDirectMessages();
+    } catch (failure) {
+      showToast(failure.message);
+    } finally {
+      send.disabled = false;
+      textarea.focus();
+    }
+  });
+  textarea.addEventListener('input', () => {
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 140)}px`;
+  });
+  textarea.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      composer.requestSubmit();
+    }
+  });
+  composerWrap.append(composer, element('p', 'composer-hint', 'Enter to send · Shift + Enter for a new line'));
+  chat.append(header, messages, composerWrap);
+  return chat;
+}
+
 function watchActiveServer() {
   if (socket?.connected && activeServerId) socket.emit('watch-server', activeServerId);
+}
+
+async function loadDirectMessages() {
+  if (!activeDmId) return;
+  const conversationId = activeDmId;
+  try {
+    const result = await api(`/api/dms/${encodeURIComponent(conversationId)}/messages`);
+    if (activeDmId !== conversationId) return;
+    const list = document.querySelector('#dm-message-list');
+    const container = document.querySelector('#dm-messages');
+    if (!list || !container) return;
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+    list.replaceChildren(...result.messages.map(renderDirectMessage));
+    if (atBottom) container.scrollTop = container.scrollHeight;
+  } catch (failure) {
+    showToast(failure.message);
+  }
+}
+
+function renderDirectMessage(message) {
+  const row = element('article', 'message');
+  row.append(avatarElement(message));
+  const body = element('div', 'message-body');
+  const meta = element('div', 'message-meta');
+  meta.append(element('span', 'message-author', message.author));
+  meta.append(element('time', 'message-time', new Date(message.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })));
+  body.append(meta, element('p', 'message-content', message.content));
+  row.append(body);
+  if (message.authorId === currentUser.id) {
+    const remove = element('button', 'delete-btn', '×');
+    remove.type = 'button';
+    remove.title = 'Delete direct message';
+    remove.setAttribute('aria-label', 'Delete your direct message');
+    remove.addEventListener('click', async () => {
+      try {
+        await api(`/api/dms/${encodeURIComponent(activeDmId)}/messages/${encodeURIComponent(message.id)}`, { method: 'DELETE' });
+        await refreshDirectMessages();
+      } catch (failure) {
+        showToast(failure.message);
+      }
+    });
+    row.append(remove);
+  }
+  return row;
 }
 
 async function loadMessages() {
