@@ -1,3 +1,27 @@
+// At the top of your server file:
+const express = require('express');
+const cors = require('cors');
+// ... other modules
+
+// Import the pre-configured Supabase client instance
+const supabase = require('./supabase'); 
+
+// You can now use the client directly inside your endpoints!
+app.post('/api/register', async (request, response, next) => {
+  try {
+    // Example database query using the imported client
+    const { data: existingUser, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', request.body.username)
+      .single();
+      
+    // ... rest of your code
+  } catch (error) {
+    next(error);
+  }
+});
+
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
